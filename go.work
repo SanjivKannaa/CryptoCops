@@ -1,0 +1,7 @@
+go 1.19
+
+use (
+	./src/services/crawl
+	./src/services/middleware
+	./src/services/scrape
+)

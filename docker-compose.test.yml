@@ -1,0 +1,238 @@
+version: '3'
+services:
+  crawler:
+    container_name: crawler-DEV
+    env_file:
+      - src/env/.env
+    build:
+      context: src/services/crawl
+      dockerfile: Dockerfile.test
+    command: 
+      - /bin/sh
+      - -c
+      - |
+        go mod download
+        if [ "$ENV" == "DEV" ]
+        then 
+          go env -w GO111MODULE=auto
+          go install github.com/githubnemo/CompileDaemon@latest
+          /go/bin/CompileDaemon -verbose -color=true -build="sh build.sh" -command="./crawl"
+        else 
+          ./crawl
+        fi
+    volumes:
+      - ./src/services/crawl:/app
+    ports:
+      - 7000:7000
+    restart: always
+    depends_on:
+      - tor
+      - db
+      - redis-db
+      - zookeeper
+      - broker
+      - middleware
+    networks:
+      - cryptocops
+    extra_hosts:
+    - "host.docker.internal:host-gateway"
+    tty: true
+    stdin_open: true
+
+  scrapper:
+    container_name: scrapper-DEV
+    env_file:
+      - src/env/.env
+    build:
+      context: src/services/scrape
+      dockerfile: Dockerfile.test
+    command: 
+      - /bin/sh
+      - -c
+      - |
+        go mod download
+        if [ "$ENV" == "DEV" ]
+        then 
+          go env -w GO111MODULE=auto
+          go install github.com/githubnemo/CompileDaemon@latest
+          /go/bin/CompileDaemon -verbose -color=true -build="sh build.sh" -command="./scrape"
+        else 
+          ./scrape
+        fi
+    volumes:
+      - ./src/services/scrape:/app
+    ports:
+      - 6000:6000
+    restart: always
+    depends_on:
+      - tor
+      - db
+      - redis-db
+      - zookeeper
+      - broker
+      - middleware
+    networks:
+      - cryptocops
+    extra_hosts:
+    - "host.docker.internal:host-gateway"
+    tty: true
+    stdin_open: true
+
+  tor:
+    container_name: tor-proxy-DEV
+    restart: always
+    image: dperson/torproxy
+    ports:
+      - 8118:8118
+      - "9050:9050"
+    networks:
+      - cryptocops
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper
+    restart: always
+    hostname: zookeeper
+    container_name: zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    networks:
+      - cryptocops
+
+  broker:
+    image: confluentinc/cp-kafka
+    container_name: broker
+    ports:
+      - "9092:9092"
+    restart: always
+    depends_on:
+      - zookeeper
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: 'zookeeper:2181'
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_INTERNAL:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://broker:9092,PLAINTEXT_INTERNAL://broker:29092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+    networks:
+      - cryptocops
+
+  db:
+    container_name: mongodb-cryptocops-DEV
+    env_file:
+      - src/env/.env
+    restart: always
+    image: mongodb/mongodb-community-server
+    volumes:
+      - mongodb-data:/data/db
+    ports:
+      - 27017:27017
+    networks:
+      - cryptocops
+
+  redis-db:
+    container_name: redis-cryptocops-DEV
+    env_file:
+      - src/env/.env
+    restart: always
+    image: "redis:alpine"
+    command: redis-server --requirepass ${REDIS_PASSWORD}
+    expose:
+      - 6379
+    ports:
+      - 6378:6378
+    volumes:
+      - redis-data:/data
+    networks:
+      - cryptocops
+    extra_hosts:
+    - "host.docker.internal:host-gateway"
+
+  middleware:
+    container_name: middleware-cryptocops-${DEPLOY_SERVER}
+    env_file:
+      - src/env/.env
+    restart: always
+    build:
+      context: src/services/middleware
+      dockerfile: Dockerfile.test
+    command:
+      - /bin/sh
+      - -c
+      - |
+        go mod download
+        if [ "$ENV" == "DEV" ]
+        then 
+          go env -w GO111MODULE=auto
+          go install github.com/githubnemo/CompileDaemon@latest
+          /go/bin/CompileDaemon -verbose -color -build="sh build.sh" -command="./middleware"
+        else 
+          ./middleware
+        fi
+    networks:
+      - cryptocops
+    volumes:
+      - ./src/services/middleware:/app
+
+  api:
+    container_name: api-cryptocops-${DEPLOY_SERVER}
+    env_file:
+      - src/env/.env
+    restart: always
+    build:
+      context: src/services/API
+      dockerfile: Dockerfile.test
+    command:
+      - /bin/sh
+      - -c
+      - |
+        go mod download
+        if [ "$ENV" == "DEV" ]
+        then 
+          go env -w GO111MODULE=auto
+          go install github.com/githubnemo/CompileDaemon@latest
+          /go/bin/CompileDaemon -verbose -color -build="sh build.sh" -command="./API"
+        else 
+          ./api
+        fi
+    ports:
+      - 8080:8080
+    depends_on:
+      - middleware
+    networks:
+      - cryptocops
+    volumes:
+      - ./src/services/API:/app
+  ml-client:
+    container_name: ML-cryptocops-${DEPLOY_SERVER}
+    env_file:
+      - src/env/.env
+    restart: always
+    build:
+      context: ./src/services/ML
+      dockerfile: Dockerfile
+    command:
+      - /bin/sh
+      - -c
+      - |
+        sleep 100
+        python3 -u ml_end_point.py
+    depends_on:
+      - crawler
+    networks:
+      - cryptocops
+    volumes:
+      - ./src/services/ML:/app
+
+
+volumes:
+  mongodb-data:
+    external: false
+  redis-data:
+    external: false
+
+networks:
+  cryptocops:
+    name: cryptocops
+    external: false
